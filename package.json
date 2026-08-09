@@ -1,0 +1,19 @@
+{
+  "name": "bazaar-pulse",
+  "version": "1.0.0",
+  "description": "",
+  "main": "rss-fetcher.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "node-cron": "^4.6.0",
+    "rss-parser": "^3.13.0"
+  }
+}
