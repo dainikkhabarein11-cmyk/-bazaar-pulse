@@ -175,8 +175,8 @@ const INDEX_SYMBOLS = [
 // since MCX also bakes in import duty, GST, and local premium.
 const TROY_OUNCE_GRAMS = 31.1035;
 const METAL_SYMBOLS = [
-  { symbol: 'XAUUSD=X', name: 'GOLD (10g)',  unitGrams: 10 },
-  { symbol: 'XAGUSD=X', name: 'SILVER (1kg)', unitGrams: 1000 },
+  { symbol: 'GC=F', name: 'GOLD (10g)',  unitGrams: 10 },
+  { symbol: 'SI=F', name: 'SILVER (1kg)', unitGrams: 1000 },
 ];
 
 // A broad basket of NSE stocks spanning large/mid/small cap, each tagged
