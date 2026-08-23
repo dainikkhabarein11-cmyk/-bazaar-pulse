@@ -246,16 +246,18 @@ async function fetchQuote(symbol) {
   const prevClose = meta.previousClose ?? meta.chartPreviousClose;
   const change = prevClose ? price - prevClose : 0;
   const pct = prevClose ? (change / prevClose) * 100 : 0;
-  return { price, change, pct, up: change >= 0 };
+  return { price, change, pct, prevClose, up: change >= 0 };
 }
 
 let marketCache = { indices: [], movers: { gainers: [], losers: [] }, lastUpdated: null };
 
 async function fetchMarketData() {
   const indices = [];
+  let usdInrQuote = null;
   for (const { symbol, name } of INDEX_SYMBOLS) {
     try {
       const q = await fetchQuote(symbol);
+      if (name === 'USD/INR') usdInrQuote = q;
       indices.push({
         name,
         val: name === 'USD/INR'
@@ -270,22 +272,28 @@ async function fetchMarketData() {
     }
   }
 
-  // Gold & silver, converted to INR per 10g / per kg using the USD/INR rate we just fetched
-  const usdInr = indices.find(i => i.name === 'USD/INR');
-  if (usdInr) {
-    const rate = parseFloat(usdInr.val);
+  // Gold & silver, converted to INR per 10g / per kg. To match how a real
+  // MCX-style INR price moves, we combine BOTH the commodity's USD price
+  // change AND the rupee's change against the dollar that day — using
+  // today's and yesterday's price for each and computing the INR value at
+  // both points, rather than just re-stating the USD % move.
+  if (usdInrQuote) {
+    const rateNow = usdInrQuote.price;
+    const ratePrev = usdInrQuote.prevClose;
     for (const { symbol, name, unitGrams } of METAL_SYMBOLS) {
       try {
         const q = await fetchQuote(symbol); // USD per troy ounce
-        const pricePerGramUsd = q.price / TROY_OUNCE_GRAMS;
-        const priceInr = pricePerGramUsd * unitGrams * rate;
-        const changeInr = (q.change / TROY_OUNCE_GRAMS) * unitGrams * rate;
+        const priceInrNow = (q.price / TROY_OUNCE_GRAMS) * unitGrams * rateNow;
+        const priceInrPrev = (q.prevClose / TROY_OUNCE_GRAMS) * unitGrams * ratePrev;
+        const changeInr = priceInrNow - priceInrPrev;
+        const pctInr = (changeInr / priceInrPrev) * 100;
+        const up = changeInr >= 0;
         indices.push({
           name,
-          val: '₹' + priceInr.toLocaleString('en-IN', { maximumFractionDigits: 0 }),
-          chg: (q.up ? '+' : '') + Math.round(changeInr).toLocaleString('en-IN'),
-          pct: (q.up ? '+' : '') + q.pct.toFixed(2) + '%',
-          up: q.up,
+          val: '₹' + priceInrNow.toLocaleString('en-IN', { maximumFractionDigits: 0 }),
+          chg: (up ? '+' : '') + Math.round(changeInr).toLocaleString('en-IN'),
+          pct: (up ? '+' : '') + pctInr.toFixed(2) + '%',
+          up,
         });
       } catch (err) {
         console.error(`✗ Metal ${name} (${symbol}) failed: ${err.message}`);
