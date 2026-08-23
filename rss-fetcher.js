@@ -169,6 +169,16 @@ const INDEX_SYMBOLS = [
   { symbol: 'INR=X',    name: 'USD/INR' },
 ];
 
+// Gold/silver: Yahoo only gives international spot price (USD/troy oz).
+// We convert to INR per 10g (gold) and per kg (silver) using the live
+// USD/INR rate, which approximates — but won't exactly match — MCX prices,
+// since MCX also bakes in import duty, GST, and local premium.
+const TROY_OUNCE_GRAMS = 31.1035;
+const METAL_SYMBOLS = [
+  { symbol: 'XAUUSD=X', name: 'GOLD (10g)',  unitGrams: 10 },
+  { symbol: 'XAGUSD=X', name: 'SILVER (1kg)', unitGrams: 1000 },
+];
+
 // A basket of liquid large-cap NSE stocks to pull for the "Top Movers" panel.
 const WATCHLIST_SYMBOLS = [
   'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'ICICIBANK.NS',
@@ -215,6 +225,29 @@ async function fetchMarketData() {
       });
     } catch (err) {
       console.error(`✗ Index ${name} (${symbol}) failed: ${err.message}`);
+    }
+  }
+
+  // Gold & silver, converted to INR per 10g / per kg using the USD/INR rate we just fetched
+  const usdInr = indices.find(i => i.name === 'USD/INR');
+  if (usdInr) {
+    const rate = parseFloat(usdInr.val);
+    for (const { symbol, name, unitGrams } of METAL_SYMBOLS) {
+      try {
+        const q = await fetchQuote(symbol); // USD per troy ounce
+        const pricePerGramUsd = q.price / TROY_OUNCE_GRAMS;
+        const priceInr = pricePerGramUsd * unitGrams * rate;
+        const changeInr = (q.change / TROY_OUNCE_GRAMS) * unitGrams * rate;
+        indices.push({
+          name,
+          val: '₹' + priceInr.toLocaleString('en-IN', { maximumFractionDigits: 0 }),
+          chg: (q.up ? '+' : '') + Math.round(changeInr).toLocaleString('en-IN'),
+          pct: (q.up ? '+' : '') + q.pct.toFixed(2) + '%',
+          up: q.up,
+        });
+      } catch (err) {
+        console.error(`✗ Metal ${name} (${symbol}) failed: ${err.message}`);
+      }
     }
   }
 
