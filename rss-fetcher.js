@@ -243,6 +243,7 @@ async function fetchMarketData() {
 // News fetching (RSS)
 // ============================================================
 
+async function fetchAll() {
   const results = [];
 
   for (const source of SOURCES) {
