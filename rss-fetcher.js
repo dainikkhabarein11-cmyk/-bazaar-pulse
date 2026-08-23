@@ -153,7 +153,96 @@ function isSimilar(a, b) {
   return overlap / Math.max(wa.size, wb.size, 1) > 0.75;
 }
 
-async function fetchAll() {
+// ============================================================
+// Live market data (indices + top movers) — via Yahoo Finance's
+// free public quote endpoint. No API key needed. This is an
+// unofficial feed (Yahoo doesn't publish it as a stable public
+// API), so if it ever stops working, treat the symbols/URL below
+// as the first thing to check or swap out.
+// ============================================================
+
+const INDEX_SYMBOLS = [
+  { symbol: '^BSESN',   name: 'SENSEX' },
+  { symbol: '^NSEI',    name: 'NIFTY 50' },
+  { symbol: '^NSEBANK', name: 'BANK NIFTY' },
+  { symbol: '^CNXIT',   name: 'NIFTY IT' },
+  { symbol: 'INR=X',    name: 'USD/INR' },
+];
+
+// A basket of liquid large-cap NSE stocks to pull for the "Top Movers" panel.
+const WATCHLIST_SYMBOLS = [
+  'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'ICICIBANK.NS',
+  'TATAMOTORS.NS', 'ADANIPORTS.NS', 'ITC.NS', 'LT.NS', 'SBIN.NS',
+  'HINDUNILVR.NS', 'KOTAKBANK.NS', 'BHARTIARTL.NS', 'AXISBANK.NS', 'MARUTI.NS',
+];
+
+async function fetchQuote(symbol) {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`;
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+      'Accept': 'application/json',
+    },
+    signal: AbortSignal.timeout(8000),
+    cache: 'no-store',
+  });
+  if (!res.ok) throw new Error(`Status code ${res.status}`);
+  const data = await res.json();
+  const meta = data?.chart?.result?.[0]?.meta;
+  if (!meta || meta.regularMarketPrice == null) throw new Error('No price data');
+  const price = meta.regularMarketPrice;
+  const prevClose = meta.previousClose ?? meta.chartPreviousClose;
+  const change = prevClose ? price - prevClose : 0;
+  const pct = prevClose ? (change / prevClose) * 100 : 0;
+  return { price, change, pct, up: change >= 0 };
+}
+
+let marketCache = { indices: [], movers: [], lastUpdated: null };
+
+async function fetchMarketData() {
+  const indices = [];
+  for (const { symbol, name } of INDEX_SYMBOLS) {
+    try {
+      const q = await fetchQuote(symbol);
+      indices.push({
+        name,
+        val: name === 'USD/INR'
+          ? q.price.toFixed(2)
+          : q.price.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+        chg: (q.up ? '+' : '') + q.change.toFixed(2),
+        pct: (q.up ? '+' : '') + q.pct.toFixed(2) + '%',
+        up: q.up,
+      });
+    } catch (err) {
+      console.error(`✗ Index ${name} (${symbol}) failed: ${err.message}`);
+    }
+  }
+
+  const movers = [];
+  for (const symbol of WATCHLIST_SYMBOLS) {
+    try {
+      const q = await fetchQuote(symbol);
+      movers.push({
+        name: symbol.replace('.NS', ''),
+        pct: q.pct,
+        val: (q.up ? '+' : '') + q.pct.toFixed(2) + '%',
+        up: q.up,
+      });
+    } catch (err) {
+      console.error(`✗ Stock ${symbol} failed: ${err.message}`);
+    }
+  }
+  // Sort by absolute move, biggest movers first
+  movers.sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct));
+
+  marketCache = { indices, movers: movers.slice(0, 8), lastUpdated: new Date().toISOString() };
+  console.log(`[${marketCache.lastUpdated}] Market data: ${indices.length} indices, ${movers.length} stocks`);
+}
+
+// ============================================================
+// News fetching (RSS)
+// ============================================================
+
   const results = [];
 
   for (const source of SOURCES) {
@@ -218,6 +307,7 @@ app.get('/api/news/:category', (req, res) => {
   const cat = req.params.category;
   res.json({ lastUpdated, items: cache.filter(n => n.category.toLowerCase() === cat.toLowerCase()) });
 });
+app.get('/api/markets', (req, res) => res.json(marketCache));
 // Hit this in your browser any time to force an immediate re-fetch (handy while testing)
 app.get('/api/refresh', async (req, res) => {
   await fetchAll();
@@ -227,6 +317,8 @@ app.get('/api/refresh', async (req, res) => {
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`API running at http://localhost:${PORT}/api/news`));
 
-// ---- Fetch immediately, then refresh every 5 minutes ----
+// ---- Fetch news every 5 minutes, market data every 2 minutes (prices move faster than headlines) ----
 fetchAll();
+fetchMarketData();
 cron.schedule('*/5 * * * *', fetchAll);
+cron.schedule('*/2 * * * *', fetchMarketData);
