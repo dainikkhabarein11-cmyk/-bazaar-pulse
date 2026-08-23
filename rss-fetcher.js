@@ -179,12 +179,54 @@ const METAL_SYMBOLS = [
   { symbol: 'XAGUSD=X', name: 'SILVER (1kg)', unitGrams: 1000 },
 ];
 
-// A basket of liquid large-cap NSE stocks to pull for the "Top Movers" panel.
-const WATCHLIST_SYMBOLS = [
-  'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'ICICIBANK.NS',
-  'TATAMOTORS.NS', 'ADANIPORTS.NS', 'ITC.NS', 'LT.NS', 'SBIN.NS',
-  'HINDUNILVR.NS', 'KOTAKBANK.NS', 'BHARTIARTL.NS', 'AXISBANK.NS', 'MARUTI.NS',
+// A broad basket of NSE stocks spanning large/mid/small cap, each tagged
+// with an approximate market cap (in ₹ crore). These figures are static
+// snapshots, not live — good enough for the >5,000cr filter and for
+// labeling a stock Large/Mid/Small cap, but they will drift out of date
+// over time and should be refreshed periodically for accuracy.
+const WATCHLIST = [
+  // Large cap (~₹2,00,000cr+)
+  { symbol:'RELIANCE.NS', mcapCr:1900000 }, { symbol:'TCS.NS', mcapCr:1400000 },
+  { symbol:'HDFCBANK.NS', mcapCr:1200000 }, { symbol:'ICICIBANK.NS', mcapCr:800000 },
+  { symbol:'INFY.NS', mcapCr:600000 }, { symbol:'BHARTIARTL.NS', mcapCr:900000 },
+  { symbol:'SBIN.NS', mcapCr:700000 }, { symbol:'ITC.NS', mcapCr:550000 },
+  { symbol:'HINDUNILVR.NS', mcapCr:550000 }, { symbol:'LT.NS', mcapCr:500000 },
+  { symbol:'BAJFINANCE.NS', mcapCr:450000 }, { symbol:'KOTAKBANK.NS', mcapCr:350000 },
+  { symbol:'MARUTI.NS', mcapCr:350000 }, { symbol:'AXISBANK.NS', mcapCr:350000 },
+  { symbol:'ASIANPAINT.NS', mcapCr:280000 }, { symbol:'ADANIENT.NS', mcapCr:300000 },
+  { symbol:'ADANIPORTS.NS', mcapCr:280000 }, { symbol:'ULTRACEMCO.NS', mcapCr:270000 },
+  { symbol:'SUNPHARMA.NS', mcapCr:370000 }, { symbol:'TITAN.NS', mcapCr:300000 },
+  { symbol:'NTPC.NS', mcapCr:330000 }, { symbol:'POWERGRID.NS', mcapCr:270000 },
+  { symbol:'NESTLEIND.NS', mcapCr:230000 }, { symbol:'WIPRO.NS', mcapCr:250000 },
+  { symbol:'HCLTECH.NS', mcapCr:430000 }, { symbol:'M&M.NS', mcapCr:300000 },
+  { symbol:'TATASTEEL.NS', mcapCr:200000 }, { symbol:'JSWSTEEL.NS', mcapCr:220000 },
+  { symbol:'ONGC.NS', mcapCr:270000 }, { symbol:'COALINDIA.NS', mcapCr:250000 },
+  { symbol:'TATAMOTORS.NS', mcapCr:300000 },
+
+  // Mid cap (~₹20,000cr – ₹2,00,000cr)
+  { symbol:'FEDERALBNK.NS', mcapCr:45000 }, { symbol:'IDFCFIRSTB.NS', mcapCr:65000 },
+  { symbol:'AUBANK.NS', mcapCr:48000 }, { symbol:'PERSISTENT.NS', mcapCr:75000 },
+  { symbol:'COFORGE.NS', mcapCr:50000 }, { symbol:'MUTHOOTFIN.NS', mcapCr:85000 },
+  { symbol:'LUPIN.NS', mcapCr:90000 }, { symbol:'BIOCON.NS', mcapCr:35000 },
+  { symbol:'TORNTPHARM.NS', mcapCr:115000 }, { symbol:'TVSMOTOR.NS', mcapCr:110000 },
+  { symbol:'ESCORTS.NS', mcapCr:40000 }, { symbol:'TRENT.NS', mcapCr:150000 },
+  { symbol:'DIXON.NS', mcapCr:55000 }, { symbol:'POLYCAB.NS', mcapCr:90000 },
+  { symbol:'CUMMINSIND.NS', mcapCr:95000 }, { symbol:'PAGEIND.NS', mcapCr:55000 },
+  { symbol:'INDHOTEL.NS', mcapCr:85000 }, { symbol:'GODREJPROP.NS', mcapCr:65000 },
+  { symbol:'OBEROIRLTY.NS', mcapCr:65000 }, { symbol:'CDSL.NS', mcapCr:22000 },
+
+  // Small cap (~₹5,000cr – ₹20,000cr)
+  { symbol:'GRANULES.NS', mcapCr:9000 }, { symbol:'JBCHEPHARM.NS', mcapCr:15000 },
+  { symbol:'RATNAMANI.NS', mcapCr:18000 }, { symbol:'FINEORG.NS', mcapCr:14000 },
+  { symbol:'CENTURYPLY.NS', mcapCr:7500 }, { symbol:'GESHIP.NS', mcapCr:9000 },
+  { symbol:'TRIVENI.NS', mcapCr:5500 },
 ];
+
+function capLabel(mcapCr){
+  if (mcapCr >= 200000) return 'Large Cap';
+  if (mcapCr >= 20000) return 'Mid Cap';
+  return 'Small Cap';
+}
 
 async function fetchQuote(symbol) {
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`;
@@ -207,7 +249,7 @@ async function fetchQuote(symbol) {
   return { price, change, pct, up: change >= 0 };
 }
 
-let marketCache = { indices: [], movers: [], lastUpdated: null };
+let marketCache = { indices: [], movers: { gainers: [], losers: [] }, lastUpdated: null };
 
 async function fetchMarketData() {
   const indices = [];
@@ -251,25 +293,30 @@ async function fetchMarketData() {
     }
   }
 
-  const movers = [];
-  for (const symbol of WATCHLIST_SYMBOLS) {
+  const candidates = [];
+  for (const { symbol, mcapCr } of WATCHLIST) {
     try {
       const q = await fetchQuote(symbol);
-      movers.push({
+      // Filter: price > ₹100 and market cap > ₹5,000cr
+      if (q.price <= 100 || mcapCr <= 5000) continue;
+      candidates.push({
         name: symbol.replace('.NS', ''),
+        price: q.price,
         pct: q.pct,
         val: (q.up ? '+' : '') + q.pct.toFixed(2) + '%',
         up: q.up,
+        cap: capLabel(mcapCr),
       });
     } catch (err) {
       console.error(`✗ Stock ${symbol} failed: ${err.message}`);
     }
   }
-  // Sort by absolute move, biggest movers first
-  movers.sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct));
 
-  marketCache = { indices, movers: movers.slice(0, 8), lastUpdated: new Date().toISOString() };
-  console.log(`[${marketCache.lastUpdated}] Market data: ${indices.length} indices, ${movers.length} stocks`);
+  const gainers = [...candidates].sort((a, b) => b.pct - a.pct).slice(0, 8);
+  const losers = [...candidates].sort((a, b) => a.pct - b.pct).slice(0, 8);
+
+  marketCache = { indices, movers: { gainers, losers }, lastUpdated: new Date().toISOString() };
+  console.log(`[${marketCache.lastUpdated}] Market data: ${indices.length} indices, ${candidates.length} eligible stocks (${gainers.length} gainers, ${losers.length} losers)`);
 }
 
 // ============================================================
