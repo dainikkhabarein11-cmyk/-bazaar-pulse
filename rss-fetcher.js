@@ -364,7 +364,10 @@ async function summarizeArticle(item) {
     signal: AbortSignal.timeout(20000),
   });
 
-  if (!res.ok) throw new Error(`Gemini status ${res.status}`);
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => '');
+    throw new Error(`Gemini status ${res.status}: ${errBody.slice(0, 300)}`);
+  }
   const data = await res.json();
   const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
   if (!raw) throw new Error('Empty response');
@@ -502,10 +505,13 @@ app.get('/api/news/:category', (req, res) => {
   res.json({ lastUpdated, items: cache.filter(n => n.category.toLowerCase() === cat.toLowerCase()) });
 });
 app.get('/api/markets', (req, res) => res.json(marketCache));
-// Hit this in your browser any time to force an immediate re-fetch (handy while testing)
-app.get('/api/refresh', async (req, res) => {
-  await fetchAll();
-  res.json({ lastUpdated, count: cache.length });
+// Hit this in your browser any time to trigger a re-fetch (handy while testing).
+// Responds immediately and runs the work in the background — a full cycle with
+// AI summarization can take well over a minute, longer than most hosting
+// platforms will hold an HTTP request open for.
+app.get('/api/refresh', (req, res) => {
+  res.json({ status: 'refresh started — check /api/news or the Render logs in a minute or two' });
+  fetchAll().catch(err => console.error('Background refresh failed:', err.message));
 });
 
 const PORT = process.env.PORT || 4000;
