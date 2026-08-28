@@ -341,7 +341,7 @@ async function fetchMarketData() {
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-const MAX_NEW_SUMMARIES_PER_CYCLE = 30; // keeps API cost/time bounded each run
+const MAX_NEW_SUMMARIES_PER_CYCLE = 15; // keeps API cost/time bounded each run
 
 const summaryCache = new Map(); // url -> { summary, impact, affected, note }
 
@@ -382,26 +382,39 @@ async function enrichWithSummaries(items) {
     return items;
   }
 
-  // Only summarize items we haven't already cached, newest first, capped per cycle
+  // Only summarize items we haven't already cached, newest first, capped per cycle.
+  // Kept smaller now that requests run one at a time to respect free-tier rate limits.
   const toSummarize = items
     .filter(item => !summaryCache.has(item.url))
     .slice(0, MAX_NEW_SUMMARIES_PER_CYCLE);
 
-  // Process in small batches so we're not firing 30 requests at once
-  const BATCH_SIZE = 5;
+  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  const REQUEST_GAP_MS = 4500; // ~13 requests/min — safely under typical free-tier caps
+
   let summarized = 0, failed = 0;
-  for (let i = 0; i < toSummarize.length; i += BATCH_SIZE) {
-    const batch = toSummarize.slice(i, i + BATCH_SIZE);
-    await Promise.all(batch.map(async (item) => {
-      try {
-        const result = await summarizeArticle(item);
-        summaryCache.set(item.url, result);
-        summarized++;
-      } catch (err) {
+  for (const item of toSummarize) {
+    try {
+      const result = await summarizeArticle(item);
+      summaryCache.set(item.url, result);
+      summarized++;
+    } catch (err) {
+      if (err.message.includes('429')) {
+        // Rate limited — wait longer, then try this one item once more
+        await sleep(15000);
+        try {
+          const retryResult = await summarizeArticle(item);
+          summaryCache.set(item.url, retryResult);
+          summarized++;
+        } catch (retryErr) {
+          console.error(`✗ Summarize failed (after retry) for "${item.headline.slice(0,50)}...": ${retryErr.message}`);
+          failed++;
+        }
+      } else {
         console.error(`✗ Summarize failed for "${item.headline.slice(0,50)}...": ${err.message}`);
         failed++;
       }
-    }));
+    }
+    await sleep(REQUEST_GAP_MS);
   }
   if (toSummarize.length > 0) {
     console.log(`AI summaries: ${summarized} generated, ${failed} failed, ${summaryCache.size} total cached`);
