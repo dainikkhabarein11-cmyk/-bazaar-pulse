@@ -340,7 +340,7 @@ async function fetchMarketData() {
 // ============================================================
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
 const MAX_NEW_SUMMARIES_PER_CYCLE = 15; // keeps API cost/time bounded each run
 
 const summaryCache = new Map(); // url -> { summary, impact, affected, note }
