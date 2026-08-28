@@ -329,9 +329,10 @@ async function fetchMarketData() {
 
 // ============================================================
 // AI Summarizer — one-line summary + market impact read, via
-// Google's Gemini API (Google AI Studio). Set GEMINI_API_KEY as an
-// environment variable on Render. Results are cached by article URL
-// so the same story isn't re-summarized (and re-billed) every cycle.
+// OpenRouter (OpenAI-compatible endpoint, works with many models
+// including free ones). Set OPENROUTER_API_KEY as an environment
+// variable on Render. Results are cached by article URL so the same
+// story isn't re-summarized (and re-billed) every fetch cycle.
 //
 // Note: this cache lives in memory only, so it resets whenever Render
 // restarts your service (e.g. after the free tier sleeps). That means
@@ -339,8 +340,8 @@ async function fetchMarketData() {
 // prototype, but worth knowing if API cost ever matters to you.
 // ============================================================
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'google/gemma-4-31b-it:free';
 const MAX_NEW_SUMMARIES_PER_CYCLE = 15; // keeps API cost/time bounded each run
 
 const summaryCache = new Map(); // url -> { summary, impact, affected, note }
@@ -351,22 +352,29 @@ async function summarizeArticle(item) {
 
   const userPrompt = `Headline: ${item.headline}\nSnippet: ${item.snippet}`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
-
-  const res = await fetch(url, {
+  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://bazaar-pulse.onrender.com',
+      'X-Title': 'BazaarPulse',
+    },
     body: JSON.stringify({
-      systemInstruction: { parts: [{ text: systemPrompt }] },
-      contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-      generationConfig: { temperature: 0.3, maxOutputTokens: 200 },
+      model: OPENROUTER_MODEL,
+      max_tokens: 200,
+      temperature: 0.3,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
     }),
     signal: AbortSignal.timeout(20000),
   });
 
-  if (!res.ok) throw new Error(`Gemini status ${res.status}`);
+  if (!res.ok) throw new Error(`OpenRouter status ${res.status}`);
   const data = await res.json();
-  const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+  const raw = data?.choices?.[0]?.message?.content?.trim();
   if (!raw) throw new Error('Empty response');
 
   // Models occasionally wrap JSON in code fences despite instructions — strip if present
@@ -377,8 +385,8 @@ async function summarizeArticle(item) {
 }
 
 async function enrichWithSummaries(items) {
-  if (!GEMINI_API_KEY) {
-    console.log('⚠ GEMINI_API_KEY not set — skipping AI summaries');
+  if (!OPENROUTER_API_KEY) {
+    console.log('⚠ OPENROUTER_API_KEY not set — skipping AI summaries');
     return items;
   }
 
