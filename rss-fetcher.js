@@ -359,7 +359,7 @@ async function summarizeArticle(item) {
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: systemPrompt }] },
       contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-      generationConfig: { temperature: 0.3, maxOutputTokens: 200 },
+      generationConfig: { temperature: 0.3, maxOutputTokens: 350, responseMimeType: 'application/json' },
     }),
     signal: AbortSignal.timeout(20000),
   });
@@ -374,7 +374,12 @@ async function summarizeArticle(item) {
 
   // Models occasionally wrap JSON in code fences despite instructions — strip if present
   const cleaned = raw.replace(/^```json\s*|^```\s*|```$/g, '').trim();
-  const parsed = JSON.parse(cleaned);
+  let parsed;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch (e) {
+    throw new Error(`JSON parse failed: ${e.message} — raw: ${cleaned.slice(0, 150)}`);
+  }
   if (!parsed.summary || !parsed.impact) throw new Error('Malformed JSON shape');
   return parsed;
 }
