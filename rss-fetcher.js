@@ -328,6 +328,101 @@ async function fetchMarketData() {
 }
 
 // ============================================================
+// AI Summarizer — one-line summary + market impact read, via
+// OpenRouter (OpenAI-compatible endpoint, works with many models
+// including Claude ones). Set OPENROUTER_API_KEY as an environment
+// variable on Render. Results are cached by article URL so the same
+// story isn't re-summarized (and re-billed) every fetch cycle.
+//
+// Note: this cache lives in memory only, so it resets whenever Render
+// restarts your service (e.g. after the free tier sleeps). That means
+// occasional re-summarization bursts on cold starts — fine for a
+// prototype, but worth knowing if API cost ever matters to you.
+// ============================================================
+
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'anthropic/claude-3.5-haiku';
+const MAX_NEW_SUMMARIES_PER_CYCLE = 30; // keeps API cost/time bounded each run
+
+const summaryCache = new Map(); // url -> { summary, impact, affected, note }
+
+async function summarizeArticle(item) {
+  const systemPrompt = `You are a financial news analyst. Given a headline and short snippet from Indian stock market news, respond with ONLY a raw JSON object — no markdown, no code fences, no explanation — in exactly this shape:
+{"summary":"one plain sentence under 22 words summarizing what happened","impact":"Bullish"|"Bearish"|"Neutral"|"Mixed","affected":["up to 3 short stock tickers or sector names most relevant, or empty array"],"note":"one short, measured sentence under 20 words on the likely read — this is an interpretation, not investment advice, so avoid definitive predictions"}`;
+
+  const userPrompt = `Headline: ${item.headline}\nSnippet: ${item.snippet}`;
+
+  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://bazaar-pulse.onrender.com',
+      'X-Title': 'BazaarPulse',
+    },
+    body: JSON.stringify({
+      model: OPENROUTER_MODEL,
+      max_tokens: 200,
+      temperature: 0.3,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    }),
+    signal: AbortSignal.timeout(20000),
+  });
+
+  if (!res.ok) throw new Error(`OpenRouter status ${res.status}`);
+  const data = await res.json();
+  const raw = data?.choices?.[0]?.message?.content?.trim();
+  if (!raw) throw new Error('Empty response');
+
+  // Models occasionally wrap JSON in code fences despite instructions — strip if present
+  const cleaned = raw.replace(/^```json\s*|^```\s*|```$/g, '').trim();
+  const parsed = JSON.parse(cleaned);
+  if (!parsed.summary || !parsed.impact) throw new Error('Malformed JSON shape');
+  return parsed;
+}
+
+async function enrichWithSummaries(items) {
+  if (!OPENROUTER_API_KEY) {
+    console.log('⚠ OPENROUTER_API_KEY not set — skipping AI summaries');
+    return items;
+  }
+
+  // Only summarize items we haven't already cached, newest first, capped per cycle
+  const toSummarize = items
+    .filter(item => !summaryCache.has(item.url))
+    .slice(0, MAX_NEW_SUMMARIES_PER_CYCLE);
+
+  // Process in small batches so we're not firing 30 requests at once
+  const BATCH_SIZE = 5;
+  let summarized = 0, failed = 0;
+  for (let i = 0; i < toSummarize.length; i += BATCH_SIZE) {
+    const batch = toSummarize.slice(i, i + BATCH_SIZE);
+    await Promise.all(batch.map(async (item) => {
+      try {
+        const result = await summarizeArticle(item);
+        summaryCache.set(item.url, result);
+        summarized++;
+      } catch (err) {
+        console.error(`✗ Summarize failed for "${item.headline.slice(0,50)}...": ${err.message}`);
+        failed++;
+      }
+    }));
+  }
+  if (toSummarize.length > 0) {
+    console.log(`AI summaries: ${summarized} generated, ${failed} failed, ${summaryCache.size} total cached`);
+  }
+
+  // Attach cached summary (if any) to every item in the list
+  return items.map(item => {
+    const ai = summaryCache.get(item.url);
+    return ai ? { ...item, aiSummary: ai.summary, aiImpact: ai.impact, aiAffected: ai.affected, aiNote: ai.note } : item;
+  });
+}
+
+// ============================================================
 // News fetching (RSS)
 // ============================================================
 
@@ -375,10 +470,13 @@ async function fetchAll() {
   // Sort newest first
   deduped.sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
 
-  cache = deduped;
+  // Attach AI summary + impact read to as many recent stories as the per-cycle cap allows
+  const enriched = await enrichWithSummaries(deduped);
+
+  cache = enriched;
   lastUpdated = new Date().toISOString();
-  fs.writeFileSync('news.json', JSON.stringify(deduped, null, 2));
-  console.log(`[${lastUpdated}] Saved ${deduped.length} deduped stories → news.json`);
+  fs.writeFileSync('news.json', JSON.stringify(enriched, null, 2));
+  console.log(`[${lastUpdated}] Saved ${enriched.length} deduped stories → news.json`);
 }
 
 // ---- Serve as an API the dashboard can fetch from ----
